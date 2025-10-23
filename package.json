@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "googleapis": "^164.1.0",
-    "next": "16.0.0"
+    "next": "16.0.0",
+    "openai": "^6.6.0"
   },
   "devDependencies": {
     "@types/node": "^20",

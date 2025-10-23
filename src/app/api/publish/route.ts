@@ -1,63 +1,169 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from "next/server";
+import { google } from "googleapis";
+
+async function getGoogleSheetsClient() {
+  const credentials = JSON.parse(
+    process.env.GOOGLE_SERVICE_ACCOUNT_KEY || "{}"
+  );
+
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+
+  const sheets = google.sheets({ version: "v4", auth });
+  return sheets;
+}
+
+async function getNextPublishableRow(sheets: any) {
+  const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+  const sheetName = process.env.GOOGLE_SHEET_NAME || "Sheet1";
+
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${sheetName}!A2:F`, // Skip header row
+  });
+
+  const rows = response.data.values || [];
+
+  // Find first row where "Creation ID" exists, "Published At" is empty, and "Error" is empty
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const creationId = row[4] || ""; // Column E (index 4)
+    const publishedAt = row[3] || ""; // Column D (index 3)
+    const error = row[5] || ""; // Column F (index 5)
+
+    if (creationId && !publishedAt && !error) {
+      return {
+        rowIndex: i + 2, // +2 because we start from row 2 (skipped header)
+        data: {
+          name: row[0] || "",
+          caption: row[1] || "",
+          link: row[2] || "",
+          publishedAt: row[3] || "",
+          creationId: row[4] || "",
+          error: row[5] || "",
+        },
+      };
+    }
+  }
+
+  return null;
+}
+
+async function updateSheetRow(
+  sheets: any,
+  rowIndex: number,
+  updates: { publishedAt?: string; error?: string }
+) {
+  const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+  const sheetName = process.env.GOOGLE_SHEET_NAME || "Sheet1";
+
+  // Update Published At (column D)
+  if (updates.publishedAt) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!D${rowIndex}`,
+      valueInputOption: "RAW",
+      resource: { values: [[updates.publishedAt]] },
+    });
+  }
+
+  // Update Error (column F)
+  if (updates.error) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!F${rowIndex}`,
+      valueInputOption: "RAW",
+      resource: { values: [[updates.error]] },
+    });
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
     // Get the access token from environment variables
     const ACCESSTOKEN = process.env.INSTAGRAM_ACCESS_TOKEN;
-    const APP_ID = process.env.APPID;
-    
+    const APP_ID = process.env.APP_ID;
+
     if (!ACCESSTOKEN || !APP_ID) {
       return NextResponse.json(
-        { error: 'Facebook access token or APP_ID is not configured' },
+        { error: "Instagram access token or APP_ID is not configured" },
         { status: 500 }
       );
     }
 
-    // Parse request body
-    const body = await request.json();
-    const { creation_id } = body;
+    // Get Google Sheets client
+    const sheets = await getGoogleSheetsClient();
 
-    // Validate required fields
-    if (!creation_id) {
+    // Get next publishable row
+    const nextRow = await getNextPublishableRow(sheets);
+
+    if (!nextRow) {
       return NextResponse.json(
-        { error: 'Missing required fields: creation_id is required' },
-        { status: 400 }
+        {
+          error:
+            "No publishable rows found (rows must have Creation ID and no Published At or Error values)",
+        },
+        { status: 404 }
       );
     }
+
+    const { rowIndex, data } = nextRow;
 
     // Build the Facebook API URL
     const apiUrl = `https://graph.facebook.com/v22.0/${APP_ID}/media_publish`;
 
     // Build query parameters
     const params = new URLSearchParams({
-      creation_id: creation_id,
+      creation_id: data.creationId,
     });
 
     // Make the request to Facebook API
     const response = await fetch(`${apiUrl}?${params.toString()}`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${ACCESSTOKEN}`,
-        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ACCESSTOKEN}`,
+        "Content-Type": "application/json",
       },
     });
 
-    const data = await response.json();
+    const responseData = await response.json();
 
-    // Return the response from Facebook API
+    // Handle Facebook API error
     if (!response.ok) {
+      const errorMsg = `PUBLISH: ${responseData.error?.message || "Facebook API error"}`;
+      await updateSheetRow(sheets, rowIndex, { error: errorMsg });
       return NextResponse.json(
-        { error: 'Facebook API error', details: data },
+        {
+          error: "Facebook API error",
+          details: responseData,
+          row: rowIndex,
+          sheetUpdated: true,
+        },
         { status: response.status }
       );
     }
 
-    return NextResponse.json(data, { status: 200 });
+    // Update sheet with published timestamp
+    const publishedAt = new Date().toISOString();
+    await updateSheetRow(sheets, rowIndex, { publishedAt });
 
+    return NextResponse.json({
+      success: true,
+      publishedAt,
+      mediaId: responseData.id,
+      row: rowIndex,
+      name: data.name,
+      message: "Publish successful, timestamp saved to sheet",
+    });
   } catch (error) {
-    console.error('Error calling Facebook API:', error);
+    console.error("Error calling Facebook API:", error);
     return NextResponse.json(
-      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      {
+        error: "Internal server error",
+        details: error instanceof Error ? error.message : "Unknown error",
+      },
       { status: 500 }
     );
   }

@@ -1,6 +1,9 @@
 import OpenAI from "openai";
 
-export async function generateCaption(title: string): Promise<string> {
+export async function generateCaption(
+  title: string,
+  transcript: string | null
+): Promise<string> {
   const apiKey = process.env.AI_API_KEY;
   const modelName = process.env.AI_MODEL_NAME || "gpt-4o-mini";
   const baseURL = process.env.AI_BASE_URL;
@@ -23,6 +26,8 @@ The caption should be:
 - Be 1-3 sentences long
 - Include 3-5 relevant hashtags at the end
 - Be suitable for Instagram reels
+
+${transcript && "Transcript: " + transcript}}
 
 Only return the caption text, nothing else.`;
 

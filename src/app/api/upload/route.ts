@@ -22,16 +22,16 @@ async function getNextUnprocessedRow(sheets: any) {
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${sheetName}!A2:F`, // Skip header row
+    range: `${sheetName}!A2:G`, // Skip header row
   });
 
   const rows = response.data.values || [];
 
-  // Find first row where both "Published At" (column D) and "Error" (column F) are empty
+  // Find first row where both "Published At" (column E) and "Error" (column G) are empty
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const publishedAt = row[3] || ""; // Column D (index 3)
-    const error = row[5] || ""; // Column F (index 5)
+    const publishedAt = row[4] || ""; // Column E (index 4)
+    const error = row[6] || ""; // Column G (index 6)
 
     if (!publishedAt && !error) {
       return {
@@ -40,9 +40,10 @@ async function getNextUnprocessedRow(sheets: any) {
           name: row[0] || "",
           caption: row[1] || "",
           link: row[2] || "",
-          publishedAt: row[3] || "",
-          creationId: row[4] || "",
-          error: row[5] || "",
+          transcript: row[3] || "",
+          publishedAt: row[4] || "",
+          creationId: row[5] || "",
+          error: row[6] || "",
         },
       };
     }
@@ -69,21 +70,21 @@ async function updateSheetRow(
     });
   }
 
-  // Update Creation ID (column E)
+  // Update Creation ID (column F)
   if (updates.creationId) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!E${rowIndex}`,
+      range: `${sheetName}!F${rowIndex}`,
       valueInputOption: "RAW",
       resource: { values: [[updates.creationId]] },
     });
   }
 
-  // Update Error (column F)
+  // Update Error (column G)
   if (updates.error) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!F${rowIndex}`,
+      range: `${sheetName}!G${rowIndex}`,
       valueInputOption: "RAW",
       resource: { values: [[updates.error]] },
     });
@@ -144,7 +145,7 @@ export async function POST(request: NextRequest) {
 
     if (!caption) {
       try {
-        caption = await generateCaption(data.name);
+        caption = await generateCaption(data.name, data.transcript);
         captionGenerated = true;
         
         // Update the caption in the sheet

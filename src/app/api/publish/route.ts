@@ -21,7 +21,7 @@ async function getNextPublishableRow(sheets: any) {
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${sheetName}!A2:F`, // Skip header row
+    range: `${sheetName}!A2:G`, // Skip header row
   });
 
   const rows = response.data.values || [];
@@ -29,9 +29,9 @@ async function getNextPublishableRow(sheets: any) {
   // Find first row where "Creation ID" exists, "Published At" is empty, and "Error" is empty
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const creationId = row[4] || ""; // Column E (index 4)
-    const publishedAt = row[3] || ""; // Column D (index 3)
-    const error = row[5] || ""; // Column F (index 5)
+    const creationId = row[5] || ""; // Column F (index 5)
+    const publishedAt = row[4] || ""; // Column E (index 4)
+    const error = row[6] || ""; // Column G (index 6)
 
     if (creationId && !publishedAt && !error) {
       return {
@@ -40,9 +40,10 @@ async function getNextPublishableRow(sheets: any) {
           name: row[0] || "",
           caption: row[1] || "",
           link: row[2] || "",
-          publishedAt: row[3] || "",
-          creationId: row[4] || "",
-          error: row[5] || "",
+          transcript: row[3] || "",
+          publishedAt: row[4] || "",
+          creationId: row[5] || "",
+          error: row[6] || "",
         },
       };
     }
@@ -59,21 +60,21 @@ async function updateSheetRow(
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
   const sheetName = process.env.GOOGLE_SHEET_NAME || "Sheet1";
 
-  // Update Published At (column D)
+  // Update Published At (column E)
   if (updates.publishedAt) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!D${rowIndex}`,
+      range: `${sheetName}!E${rowIndex}`,
       valueInputOption: "RAW",
       resource: { values: [[updates.publishedAt]] },
     });
   }
 
-  // Update Error (column F)
+  // Update Error (column G)
   if (updates.error) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!F${rowIndex}`,
+      range: `${sheetName}!G${rowIndex}`,
       valueInputOption: "RAW",
       resource: { values: [[updates.error]] },
     });

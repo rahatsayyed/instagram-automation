@@ -112,6 +112,7 @@ async function updateSheetRow(
   }
 }
 
+
 export async function POST(request: NextRequest) {
   try {
     // Get the access token from environment variables
@@ -126,8 +127,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Get sheet name from request body or use default
-    const body = await request.json();
-    const sheetName = body.sheetName || "motivational"; // Default category
+    // const body = await request.json();
+    const sheetName = process.env.GOOGLE_SHEET_NAME || "motivational"; // Default category
 
     // Get Google Sheets client
     const sheets = await getGoogleSheetsClient();

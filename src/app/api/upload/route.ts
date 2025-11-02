@@ -16,34 +16,44 @@ async function getGoogleSheetsClient() {
   return sheets;
 }
 
-async function getNextUnprocessedRow(sheets: any) {
+async function getNextUnprocessedRow(sheets: any, sheetName: string) {
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
-  const sheetName = process.env.GOOGLE_SHEET_NAME || "Sheet1";
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${sheetName}!A2:G`, // Skip header row
+    range: `${sheetName}!A2:K`, // Skip header row, columns A-K
   });
 
   const rows = response.data.values || [];
 
-  // Find first row where both "Published At" (column E) and "Error" (column G) are empty
+  // Find first row where:
+  // - Cloudinary URL exists (column C)
+  // - Instagram Caption is empty or exists (column H)
+  // - Published At (IG) is empty (column I)
+  // - Creation ID is empty (column J)
+  // - Error is empty (column K)
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const publishedAt = row[4] || ""; // Column E (index 4)
-    const error = row[6] || ""; // Column G (index 6)
+    const cloudinaryUrl = row[2] || ""; // Column C (index 2)
+    const publishedAt = row[8] || ""; // Column I (index 8)
+    const creationId = row[9] || ""; // Column J (index 9)
+    const error = row[10] || ""; // Column K (index 10)
 
-    if (!publishedAt && !error) {
+    if (cloudinaryUrl && !publishedAt && !creationId && !error) {
       return {
         rowIndex: i + 2, // +2 because we start from row 2 (skipped header)
         data: {
-          name: row[0] || "",
-          caption: row[1] || "",
-          link: row[2] || "",
-          transcript: row[3] || "",
-          publishedAt: row[4] || "",
-          creationId: row[5] || "",
-          error: row[6] || "",
+          timestamp: row[0] || "",
+          youtubeUrl: row[1] || "",
+          cloudinaryUrl: row[2] || "",
+          title: row[3] || "",
+          description: row[4] || "",
+          thumbnail: row[5] || "",
+          tags: row[6] || "",
+          instagramCaption: row[7] || "",
+          publishedAt: row[8] || "",
+          creationId: row[9] || "",
+          error: row[10] || "",
         },
       };
     }
@@ -54,39 +64,50 @@ async function getNextUnprocessedRow(sheets: any) {
 
 async function updateSheetRow(
   sheets: any,
+  sheetName: string,
   rowIndex: number,
   updates: { caption?: string; creationId?: string; error?: string }
 ) {
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
-  const sheetName = process.env.GOOGLE_SHEET_NAME || "Sheet1";
 
-  // Update Caption (column B)
-  if (updates.caption) {
+  // Update Instagram Caption (column H)
+  if (updates.caption !== undefined) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!B${rowIndex}`,
+      range: `${sheetName}!H${rowIndex}`,
       valueInputOption: "RAW",
       resource: { values: [[updates.caption]] },
     });
   }
 
-  // Update Creation ID (column F)
-  if (updates.creationId) {
+  // Update Creation ID (column J)
+  if (updates.creationId !== undefined) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!F${rowIndex}`,
+      range: `${sheetName}!J${rowIndex}`,
       valueInputOption: "RAW",
       resource: { values: [[updates.creationId]] },
     });
   }
 
-  // Update Error (column G)
-  if (updates.error) {
+  // Append Error (column K) - append on new line if existing error
+  if (updates.error !== undefined) {
+    // First, get existing error value
+    const existingResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${sheetName}!K${rowIndex}`,
+    });
+
+    const existingError = existingResponse.data.values?.[0]?.[0] || "";
+    const newError = existingError
+      ? `${existingError}\n${updates.error}`
+      : updates.error;
+
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!G${rowIndex}`,
+      range: `${sheetName}!K${rowIndex}`,
       valueInputOption: "RAW",
-      resource: { values: [[updates.error]] },
+      resource: { values: [[newError]] },
     });
   }
 }
@@ -104,15 +125,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Get sheet name from request body or use default
+    const body = await request.json();
+    const sheetName = body.sheetName || "motivational"; // Default category
+
     // Get Google Sheets client
     const sheets = await getGoogleSheetsClient();
 
     // Get next unprocessed row
-    const nextRow = await getNextUnprocessedRow(sheets);
+    const nextRow = await getNextUnprocessedRow(sheets, sheetName);
 
     if (!nextRow) {
       return NextResponse.json(
-        { error: "No unprocessed rows found in the sheet" },
+        {
+          error: `No unprocessed rows found in sheet '${sheetName}'`,
+          message:
+            "All videos are either already uploaded or have errors. Add new videos or clear errors.",
+        },
         { status: 404 }
       );
     }
@@ -120,46 +149,48 @@ export async function POST(request: NextRequest) {
     const { rowIndex, data } = nextRow;
 
     // Validate required fields from sheet
-    if (!data.link) {
-      const errorMsg = "UPLOAD: Missing video link in sheet";
-      await updateSheetRow(sheets, rowIndex, { error: errorMsg });
+    if (!data.cloudinaryUrl) {
+      const errorMsg = `[${new Date().toISOString()}] UPLOAD: Missing Cloudinary URL`;
+      await updateSheetRow(sheets, sheetName, rowIndex, { error: errorMsg });
       return NextResponse.json(
-        { error: errorMsg, row: rowIndex },
+        { error: errorMsg, row: rowIndex, sheetName },
         { status: 400 }
       );
     }
 
-    // Check if name/title exists
-    if (!data.name) {
-      const errorMsg = "UPLOAD: Missing name/title in sheet";
-      await updateSheetRow(sheets, rowIndex, { error: errorMsg });
+    // Check if title exists
+    if (!data.title) {
+      const errorMsg = `[${new Date().toISOString()}] UPLOAD: Missing video title`;
+      await updateSheetRow(sheets, sheetName, rowIndex, { error: errorMsg });
       return NextResponse.json(
-        { error: errorMsg, row: rowIndex },
+        { error: errorMsg, row: rowIndex, sheetName },
         { status: 400 }
       );
     }
 
     // Generate caption if not present
-    let caption = data.caption;
+    let caption = data.instagramCaption;
     let captionGenerated = false;
 
     if (!caption) {
       try {
-        caption = await generateCaption(data.name, data.transcript);
+        caption = await generateCaption(data.title, data.description);
         captionGenerated = true;
-        
+
         // Update the caption in the sheet
-        await updateSheetRow(sheets, rowIndex, { caption });
+        await updateSheetRow(sheets, sheetName, rowIndex, { caption });
       } catch (aiError) {
-        const errorMsg = `UPLOAD: Failed to generate caption - ${
+        const errorMsg = `[${new Date().toISOString()}] UPLOAD: Failed to generate caption - ${
           aiError instanceof Error ? aiError.message : "Unknown AI error"
         }`;
-        await updateSheetRow(sheets, rowIndex, { error: errorMsg });
+        await updateSheetRow(sheets, sheetName, rowIndex, { error: errorMsg });
         return NextResponse.json(
           {
             error: "Failed to generate caption",
-            details: aiError instanceof Error ? aiError.message : "Unknown error",
+            details:
+              aiError instanceof Error ? aiError.message : "Unknown error",
             row: rowIndex,
+            sheetName,
           },
           { status: 500 }
         );
@@ -173,8 +204,8 @@ export async function POST(request: NextRequest) {
     const params = new URLSearchParams({
       media_type: "REELS",
       caption: caption,
-      cover_url: data.link.replace(/\.[^/.]+$/, ".jpg"),
-      video_url: data.link,
+      cover_url: data.cloudinaryUrl.replace(/\.[^/.]+$/, ".jpg"),
+      video_url: data.cloudinaryUrl,
     });
 
     // Make the request to Facebook API
@@ -190,15 +221,16 @@ export async function POST(request: NextRequest) {
 
     // Handle Facebook API error
     if (!response.ok) {
-      const errorMsg = `UPLOAD: ${
+      const errorMsg = `[${new Date().toISOString()}] UPLOAD: ${
         responseData.error?.message || "Facebook API error"
-      }`;
-      await updateSheetRow(sheets, rowIndex, { error: errorMsg });
+      } (Code: ${responseData.error?.code || "unknown"})`;
+      await updateSheetRow(sheets, sheetName, rowIndex, { error: errorMsg });
       return NextResponse.json(
         {
           error: "Facebook API error",
           details: responseData,
           row: rowIndex,
+          sheetName,
           sheetUpdated: true,
         },
         { status: response.status }
@@ -207,16 +239,19 @@ export async function POST(request: NextRequest) {
 
     // Update sheet with creation_id
     const creationId = responseData.id;
-    await updateSheetRow(sheets, rowIndex, { creationId });
+    await updateSheetRow(sheets, sheetName, rowIndex, { creationId });
 
     return NextResponse.json({
       success: true,
       creationId,
       row: rowIndex,
-      name: data.name,
+      sheetName,
+      title: data.title,
+      youtubeUrl: data.youtubeUrl,
+      cloudinaryUrl: data.cloudinaryUrl,
       captionGenerated,
       caption: captionGenerated ? caption : undefined,
-      message: captionGenerated 
+      message: captionGenerated
         ? "Caption generated by AI, upload successful, creation ID saved to sheet"
         : "Upload successful, creation ID saved to sheet",
     });

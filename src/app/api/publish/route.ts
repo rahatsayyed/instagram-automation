@@ -15,35 +15,41 @@ async function getGoogleSheetsClient() {
   return sheets;
 }
 
-async function getNextPublishableRow(sheets: any) {
+async function getNextPublishableRow(sheets: any, sheetName: string) {
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
-  const sheetName = process.env.GOOGLE_SHEET_NAME || "Sheet1";
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${sheetName}!A2:G`, // Skip header row
+    range: `${sheetName}!A2:K`, // Skip header row, columns A-K
   });
 
   const rows = response.data.values || [];
 
-  // Find first row where "Creation ID" exists, "Published At" is empty, and "Error" is empty
+  // Find first row where:
+  // - Creation ID exists (column J)
+  // - Published At (IG) is empty (column I)
+  // - Error is empty (column K)
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const creationId = row[5] || ""; // Column F (index 5)
-    const publishedAt = row[4] || ""; // Column E (index 4)
-    const error = row[6] || ""; // Column G (index 6)
+    const creationId = row[9] || ""; // Column J (index 9)
+    const publishedAt = row[8] || ""; // Column I (index 8)
+    const error = row[10] || ""; // Column K (index 10)
 
     if (creationId && !publishedAt && !error) {
       return {
         rowIndex: i + 2, // +2 because we start from row 2 (skipped header)
         data: {
-          name: row[0] || "",
-          caption: row[1] || "",
-          link: row[2] || "",
-          transcript: row[3] || "",
-          publishedAt: row[4] || "",
-          creationId: row[5] || "",
-          error: row[6] || "",
+          timestamp: row[0] || "",
+          youtubeUrl: row[1] || "",
+          cloudinaryUrl: row[2] || "",
+          title: row[3] || "",
+          description: row[4] || "",
+          thumbnail: row[5] || "",
+          tags: row[6] || "",
+          instagramCaption: row[7] || "",
+          publishedAt: row[8] || "",
+          creationId: row[9] || "",
+          error: row[10] || "",
         },
       };
     }
@@ -54,29 +60,40 @@ async function getNextPublishableRow(sheets: any) {
 
 async function updateSheetRow(
   sheets: any,
+  sheetName: string,
   rowIndex: number,
   updates: { publishedAt?: string; error?: string }
 ) {
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
-  const sheetName = process.env.GOOGLE_SHEET_NAME || "Sheet1";
 
-  // Update Published At (column E)
-  if (updates.publishedAt) {
+  // Update Published At (IG) (column I)
+  if (updates.publishedAt !== undefined) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!E${rowIndex}`,
+      range: `${sheetName}!I${rowIndex}`,
       valueInputOption: "RAW",
       resource: { values: [[updates.publishedAt]] },
     });
   }
 
-  // Update Error (column G)
-  if (updates.error) {
+  // Append Error (column K) - append on new line if existing error
+  if (updates.error !== undefined) {
+    // First, get existing error value
+    const existingResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${sheetName}!K${rowIndex}`,
+    });
+
+    const existingError = existingResponse.data.values?.[0]?.[0] || "";
+    const newError = existingError
+      ? `${existingError}\n${updates.error}`
+      : updates.error;
+
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!G${rowIndex}`,
+      range: `${sheetName}!K${rowIndex}`,
       valueInputOption: "RAW",
-      resource: { values: [[updates.error]] },
+      resource: { values: [[newError]] },
     });
   }
 }
@@ -94,17 +111,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Get sheet name from request body or use default
+    const body = await request.json();
+    const sheetName = body.sheetName || "motivational"; // Default category
+
     // Get Google Sheets client
     const sheets = await getGoogleSheetsClient();
 
     // Get next publishable row
-    const nextRow = await getNextPublishableRow(sheets);
+    const nextRow = await getNextPublishableRow(sheets, sheetName);
 
     if (!nextRow) {
       return NextResponse.json(
         {
-          error:
-            "No publishable rows found (rows must have Creation ID and no Published At or Error values)",
+          error: `No publishable rows found in sheet '${sheetName}'`,
+          message:
+            "Rows must have Creation ID, and empty Published At (IG) and Error values",
         },
         { status: 404 }
       );
@@ -133,29 +155,36 @@ export async function POST(request: NextRequest) {
 
     // Handle Facebook API error
     if (!response.ok) {
-      const errorMsg = `PUBLISH: ${responseData.error?.message || "Facebook API error"}`;
-      await updateSheetRow(sheets, rowIndex, { error: errorMsg });
+      const errorMsg = `[${new Date().toISOString()}] PUBLISH: ${
+        responseData.error?.message || "Facebook API error"
+      } (Code: ${responseData.error?.code || "unknown"})`;
+      await updateSheetRow(sheets, sheetName, rowIndex, { error: errorMsg });
       return NextResponse.json(
         {
           error: "Facebook API error",
           details: responseData,
           row: rowIndex,
+          sheetName,
           sheetUpdated: true,
         },
         { status: response.status }
       );
     }
 
-    // Update sheet with published timestamp
+    // Update sheet with published timestamp (ISO format)
     const publishedAt = new Date().toISOString();
-    await updateSheetRow(sheets, rowIndex, { publishedAt });
+    await updateSheetRow(sheets, sheetName, rowIndex, { publishedAt });
 
     return NextResponse.json({
       success: true,
       publishedAt,
       mediaId: responseData.id,
       row: rowIndex,
-      name: data.name,
+      sheetName,
+      title: data.title,
+      youtubeUrl: data.youtubeUrl,
+      cloudinaryUrl: data.cloudinaryUrl,
+      instagramCaption: data.instagramCaption,
       message: "Publish successful, timestamp saved to sheet",
     });
   } catch (error) {
